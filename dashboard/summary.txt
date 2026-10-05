@@ -1,0 +1,216 @@
+================================================================================
+ PROBABILISTIC SMART HOME DECISION NETWORK — PROJECT SUMMARY
+ Generated: 2026-10-05 | Scope: full repository (SMART_HOME_BN), with focus on
+ the live dashboard (this folder)
+================================================================================
+
+1. WHAT THE PROJECT IS
+--------------------------------------------------------------------------------
+A research / semester-style machine-learning project that builds a 26-node
+Bayesian / Decision Network over three CASAS smart-home datasets (Aruba, Cairo,
+Milan). The system:
+
+  * Watches raw sensor event logs (ON/OFF/OPEN/CLOSE motion & contact events),
+  * Aggregates them into 5-second tumbling windows with 18 observable evidence
+    variables, 6 weakly-labeled behavioral states, and temporal features,
+  * Learns Conditional Probability Tables (CPTs) with pgmpy's
+    DiscreteBayesianNetwork + BDeu Dirichlet smoothing,
+  * Runs exact inference (Variable Elimination) per window to produce posterior
+    beliefs about resident behavior, and
+  * Chooses a home-automation action via Maximum Expected Utility (MEU) over a
+    utility matrix (No_Action / Monitor / Notify_Resident / Silent_Alert /
+    Local_Alert).
+
+No variables are fabricated: sensors absent in a home (e.g. no Bathroom in
+Cairo, no temperature/humidity anywhere) are encoded as "Unavailable" rather
+than invented.
+
+2. DATASETS
+--------------------------------------------------------------------------------
+  Home  | Raw Events  | Date Range            | Event Types
+  ------+-------------+-----------------------+---------------------------
+  Aruba | 1,602,821   | 2010-11-04→2011-06-11 | ON, OFF, OPEN, CLOSE
+  Cairo |   647,487   | 2009-06-10→2009-08-05 | ON, OFF (doors included)
+  Milan |   421,392   | 2009-10-16→2010-01-06 | ON, OFF, OPEN, CLOSE
+
+Processed (data/processed/): modeling_dataset.csv (~1,078,797 x 26),
+train.csv (755,156), validation.csv (161,820), test.csv (161,821 rows).
+Chronological 70/15/15 split per home — no shuffling.
+
+3. ML PIPELINE (project root)
+--------------------------------------------------------------------------------
+  main.py                  Single entry point running all phases 1–30.
+  src/inspect_datasets.py  Phase 1: raw dataset inspection.
+  src/preprocessing.py     Phases 2–15: cleaning, 5s windowing, feature
+                           construction, discretization, weak labels, split.
+  src/model.py             Phases 16–20: 26-node DAG definition, graph
+                           validation/export, CPT learning (BDeu), inference
+                           engine wrapper (BayesianInferenceEngine,
+                           build_full_dag, node/edge constants).
+  src/decision.py          Phases 21–24: ACTIONS, UTILITY_MATRIX,
+                           SITUATIONAL_STATES, select_action_meu().
+  src/evaluation.py        Phases 25–30: metrics, latency, cross-home eval,
+                           figures.
+  tests/test_pipeline.py   10 unit tests (pytest).
+  outputs/models/bayesian_network.pkl   Trained model used by the dashboard.
+  outputs/figures, outputs/metrics      Generated plots and result summaries.
+
+4. THE 26-NODE NETWORK
+--------------------------------------------------------------------------------
+  Evidence (18): 11 room-activity counters (Bedroom, Bathroom, DiningRoom,
+                 GuestRoom, Kitchen, LivingRoom, LoungeChair, OtherRoom,
+                 OutsideDoor, WorkArea, Hall), 2 door-contact variables
+                 (OutsideDoor_Open/Close), 3 temporal (Time_Of_Day,
+                 Day_Of_Week, Is_Night), 2 aggregates (Total_Activity,
+                 Total_Contact_Events).
+  Behavioral (6): Home_Occupancy, Resident_Activity, Resident_Sleep,
+                 Leaving_Home, Returning_Home, Unusual_Activity.
+  Decision (1):   Smart_Home_Action  → one of 5 actions.
+  Utility (1):    Homeowner_Utility  → EU over 4 situational states
+                 (e.g. Home_Safe, Home_Emergency, Away_Safe, Away_Emergency).
+
+  Evidence → Behavioral → Decision → Utility, per the DAG in src/model.py.
+
+5. THE DASHBOARD (this folder) — the "site"
+--------------------------------------------------------------------------------
+A FastAPI backend + D3.js single-page frontend that replays the 161,821 test
+windows and streams live inference to the browser.
+
+  main.py (FastAPI backend, port 8000)
+    - Loads outputs/models/bayesian_network.pkl and data/processed/test.csv at
+      startup; wraps window rows into evidence dicts ("Unavailable" excluded)
+      and calls engine.query() + select_action_meu().
+    - REST endpoints:
+        GET  /                   → serves templates/index.html
+        GET  /api/network         → 26 nodes + DAG edges, pipeline-stage layout
+                                    coords (6 ordered columns) + stage labels
+        GET  /api/nodes           → node lists by category
+        GET  /api/actions         → ACTIONS, UTILITY_MATRIX, SITUATIONAL_STATES
+        GET  /api/window/{idx}    → inference result for one window
+        GET  /api/next-window     → advances playback cursor (wraps at end)
+        GET  /api/stats           → totals, homes, playback state
+    - WebSocket /ws — protocol (JSON messages):
+        client → server: {"type":"play","speed":1.0} | {"type":"pause"} |
+                         {"type":"speed","speed":2.0} | {"type":"jump","index":123}
+        server → client: {"type":"update","data":{...}} per window, containing
+                         evidence, posteriors, decision (selected_action,
+                         expected_utilities, state_probabilities), true_labels,
+                         predictions, timestamp, home_id, index/total.
+        A background asyncio task (playback_loop) pushes updates to all
+        connected clients at the configured speed (seconds per window).
+
+  templates/index.html
+    Three-zone layout with the 26-NODE NETWORK CENTER-STAGE:
+      CENTER  network graph + live replay dock (play/pause, prev/next, speed,
+              clickable timeline scrubber, 5-second window pulse) + floating
+              node detail card.
+      LEFT    live inference — observed evidence grid (per-window change
+              highlighting) and behavioral posterior bars.
+      RIGHT   MEU decision engine — selected action, expected-utility rows,
+              situational state probabilities, prediction-vs-weak-label cards.
+    A sensor clock in the header shows the replayed window timestamp; the
+    replay auto-starts when the page opens (or refreshes). Loads D3 v7 from
+    CDN, Inter + JetBrains Mono from Google Fonts.
+
+  static/dashboard.js
+    All frontend logic: D3 rendering of the server-computed pipeline-stage
+    layout (deterministic column flow, no spring randomness), stage captions,
+    the selected node), per-window graph animation (evidence nodes highlight,
+    behavioral nodes glow, high-confidence edges flow), WebSocket client with
+    auto-reconnect and AUTOPLAY on first connect, playback controls, clickable
+    timeline scrubber, evidence change highlighting, latency EMA readout, and
+    XSS-escaped rendering.
+
+  static/styles.css
+    Theme, layout grid, and component styling (posterior bars, utility bars,
+    state cards, connection-status dot, animations).
+
+  server.log
+    Uvicorn log from a previous run (shows the model loading 161,821 windows
+    and successful requests).
+
+6. HOW TO RUN — ./run_dashboard.sh (in this folder)
+--------------------------------------------------------------------------------
+The launcher activates every necessary component, in order:
+
+  1. Resolves the project root (parent of this dashboard folder) and locates
+     the Python virtualenv (.venv); creates it from python3 if missing.
+  2. Verifies all required packages: fastapi, uvicorn, pandas, numpy, pgmpy,
+     networkx, websockets — auto-installing anything missing (installs
+     "uvicorn[standard]" + "websockets" for WebSocket support, which
+     requirements.txt does not currently include).
+  3. Verifies the two runtime artifacts exist:
+        ../outputs/models/bayesian_network.pkl
+        ../data/processed/test.csv
+     (If missing, it tells you to run the full pipeline first: root main.py.)
+  4. Starts uvicorn serving dashboard/main.py on 0.0.0.0:8000 and prints the
+     dashboard URL.
+
+  Usage:
+     ./run_dashboard.sh                 # normal start
+     HOST=127.0.0.1 PORT=9000 ./run_dashboard.sh
+     RELOAD=1 ./run_dashboard.sh        # auto-reload on code changes
+     ./run_dashboard.sh --log-level debug   # extra args pass to uvicorn
+
+  Manual equivalent (if you prefer):
+     cd SMART_HOME_BN
+     source .venv/bin/activate
+     pip install fastapi "uvicorn[standard]" websockets
+     cd dashboard && python -m uvicorn main:app --host 0.0.0.0 --port 8000
+     → open http://localhost:8000 and press ▶ to start live playback.
+
+7. DEPENDENCIES
+--------------------------------------------------------------------------------
+  requirements.txt (root): numpy, pandas, scipy, scikit-learn, matplotlib,
+  seaborn, pgmpy>=0.1.25, networkx, pytest.
+
+  Dashboard additionally needs (NOT in requirements.txt):
+     fastapi, uvicorn (WebSocket support: websockets or wsproto).
+
+  Installed venv versions at time of writing: Python 3.12, fastapi 0.142.2,
+  uvicorn 0.54.0, pgmpy 1.1.2, pandas 3.0.6, numpy 2.5.3, networkx 3.7,
+  websockets 17.2 (added by run_dashboard.sh).
+
+8. PROJECT STRUCTURE
+--------------------------------------------------------------------------------
+  SMART_HOME_BN/
+  ├── main.py                  Full pipeline entry point (phases 1–30)
+  ├── requirements.txt         Pipeline dependencies
+  ├── README.md, project_plan.md, TRACKER.txt
+  ├── data/  aruba.csv, cairo.csv, milan.csv, processed/*.csv
+  ├── src/   inspect_datasets, preprocessing, model, decision, evaluation
+  ├── outputs/  models/bayesian_network.pkl, figures/, metrics/
+  ├── tests/ test_pipeline.py
+  └── dashboard/  ← YOU ARE HERE
+      ├── main.py              FastAPI backend (this site)
+      ├── templates/index.html UI template
+      ├── static/dashboard.js  Frontend logic
+      ├── static/styles.css    Styling
+      ├── server.log           Previous run log
+      ├── run_dashboard.sh     One-command launcher (see section 6)
+      └── summary.txt          This file
+
+9. KNOWN NOTES / MINOR ISSUES
+--------------------------------------------------------------------------------
+  FIXED (2026-10-05): main.py used to register @app.on_event("startup")
+  twice, loading the model + 161k-row test.csv twice at boot; it now uses a
+  single FastAPI lifespan handler (verified: exactly one "Loaded model" line,
+  zero deprecation warnings).
+  FIXED (2026-10-05): WebSocket input hardening — non-JSON messages now get an
+  {"type":"error"} reply instead of crashing the connection; "speed" values
+  are coerced with float() (bad input falls back to 1.0); "jump" guards
+  against empty data; negative /api/window/{idx} returns a clean error; WS
+  disconnect and send-failure handling no longer use bare except or assume
+  the client is still in the list.
+  * requirements.txt omits fastapi/uvicorn/websockets — the run script
+    compensates by installing them when missing.
+  * FIXED (2026-10-05): dashboard redesigned — network graph is now the
+    center panel with live replay dock; evidence/posteriors moved to the left
+    panel, decision engine to the right. Playback now auto-starts on page
+    load (WS connect), and a manual jump syncs the playback cursor so the
+    stream continues from the selected window.
+  * The "previous window" button steps back exactly one window from the
+    current one; there is no dedicated /api/prev-window endpoint.
+  * index.html pulls D3 and fonts from public CDNs, so the dashboard needs
+    internet access in the browser for full styling (the API itself is local).
+================================================================================

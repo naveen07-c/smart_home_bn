@@ -1,0 +1,351 @@
+================================================================================
+ PROBABILISTIC SMART HOME DECISION NETWORK — COMPLETE PIPELINE (INPUT → OUTPUT)
+ Generated: 2026-10-05 | Entry point: main.py (root) | Runtime: python main.py
+ Companion docs: dcumentation.txt (methodology/rationale), dashboard/summary.txt
+================================================================================
+
+PIPELINE AT A GLANCE
+
+  RAW CASAS CSVs          3 files, ~2.67 M events, 4 unlabeled text columns
+        │  load & clean (dedupe, strip, timestamp parse, sort)
+        ▼
+  CLEAN EVENT STREAMS     per home: timestamp, home_id + original 4 columns
+        │  5-second tumbling windowing (floor("5s"))
+        ▼
+  NUMERIC WINDOW TABLES   26 numeric columns incl. −1 sentinels, per home
+        │  discretize (documented thresholds) + 6 weak-label rules
+        ▼
+  DISCRETE MODELING DATA  all-categorical 26-column rows, 1,078,797 rows total
+        │  chronological split 70/15/15 per home
+        ▼
+  TRAIN / VAL / TEST CSV  755,156 / 161,820 / 161,821 rows
+        │  CPT learning (BDeu ESS=5) on train only
+        ▼
+  TRAINED MODEL           outputs/models/bayesian_network.pkl (24 CPTs)
+        │  Variable Elimination per window + MEU action selection
+        ▼
+  EVALUATION METRICS      CSVs/JSON under outputs/metrics/ (test n=3,000)
+        │  + 10 PNG figures under outputs/figures/
+        ▼
+  FINAL REPORT            outputs/FINAL_RESULTS.md
+        │  (dashboard replays the SAME test.csv live via FastAPI/WebSocket)
+        ▼
+  LIVE DASHBOARD          http://localhost:8000 — per-window inference stream
+
+The same 26-column schema is the contract between every stage: it is created by
+preprocessing, consumed by model training, and replayed row-by-row by the
+dashboard. Section 10 documents that schema in full.
+
+--------------------------------------------------------------------------------
+STAGE 0 — INPUT: RAW CASAS EVENT LOGS
+--------------------------------------------------------------------------------
+Location:   data/aruba.csv, data/cairo.csv, data/milan.csv
+Producer:   CASAS project public releases (human-verified smart homes)
+Consumers:  src/inspect_datasets.py (stats), src/preprocessing.py (pipeline)
+
+FORMAT DETAIL
+  * Plain-text CSV, UTF-8, comma-delimited, NO header row.
+  * Exactly 4 columns, all free text:
+      1. date      "YYYY-MM-DD"                     e.g. 2010-11-04
+      2. time      "HH:MM:SS.ffffff" (microsecond)  e.g. 00:03:50.209589
+      3. location  sensor/room name                 e.g. Bedroom, OutsideDoor
+      4. event     sensor transition                ON | OFF | OPEN | CLOSE
+  * Example (aruba.csv):
+      2010-11-04,00:03:50.209589,Bedroom,ON
+      2010-11-04,00:03:57.399391,Bedroom,OFF
+      2010-11-04,02:32:33.351906,Bedroom,ON
+  * Ordered roughly chronological per file, but NOT guaranteed: duplicates,
+    stray whitespace, and out-of-order rows exist and are handled downstream.
+  * Event vocabulary differs per home — Aruba/Milan have OPEN/CLOSE door
+    contacts; Cairo uses ON/OFF on its OutsideDoor (motion-style). Sensor sets
+    also differ (see the Unavailable rules in Stage 3).
+
+  SIZE: Aruba 1,602,821 events; Cairo 647,487; Milan 421,392 → 2,671,700 rows.
+
+--------------------------------------------------------------------------------
+STAGE 1 — DATASET INSPECTION (Phase 1)
+--------------------------------------------------------------------------------
+Code:       src/inspect_datasets.py → inspect_datasets()
+Input:      the 3 raw CSVs
+Outputs:    console report + outputs/metrics/dataset_summary.csv,
+            event_summary.csv, location_summary.csv
+FORMAT:     dataset_summary.csv — one row per home:
+            (home_id, raw_events, date_min, date_max, n_locations,
+             event_types). event_summary.csv / location_summary.csv — count
+            tables per event type / location. These numbers feed FINAL_RESULTS
+            Section 1 and are the sanity gate before expensive processing.
+
+--------------------------------------------------------------------------------
+STAGE 2 — CLEANING (Phases 2–3)
+--------------------------------------------------------------------------------
+Code:       src/preprocessing.py → load_and_clean_raw_data(home_id)
+Steps:      1. read CSV with header=None, names=[date, time, location, event],
+               dtype=str
+            2. strip whitespace on location/event
+            3. timestamp = pd.to_datetime(date + " " + time, format="mixed",
+               errors="coerce")
+            4. drop rows where timestamp is NaT (invalid dates)
+            5. drop exact duplicates on (date, time, location, event)
+            6. sort by timestamp, reset index
+            7. tag home_id (Aruba/Cairo/Milan, capitalized)
+In-memory FORMAT after this stage (pandas DataFrame):
+            timestamp  datetime64[ns]  (sorted, unique-enough)
+            home_id    str
+            date, time, location, event  str (original columns retained)
+
+--------------------------------------------------------------------------------
+STAGE 3 — 5-SECOND WINDOWING & NUMERIC FEATURES (Phases 4–9)
+--------------------------------------------------------------------------------
+Code:       src/preprocessing.py → aggregate_5s_windows(df_clean, home_name)
+Operation:  window_start = timestamp.floor("5s"); every downstream feature is
+            computed per window. Tumbling windows — a window exists only when
+            ≥1 event occurred inside it (active windows only).
+
+FORMAT: one row per active 5-second window; 26 numeric columns:
+  home_id      str                window_start  datetime64[ns]
+  --- 11 room-activity count columns (events observed in that room) ---
+  Bedroom_Activity, Bathroom_Activity, DiningRoom_Activity, GuestRoom_Activity,
+  Kitchen_Activity, LivingRoom_Activity, LoungeChair_Activity,
+  OtherRoom_Activity, OutsideDoor_Activity, WorkArea_Activity, Hall_Activity
+      values: 0,1,2,... event counts for native sensors; ** −1 sentinel when
+      the home has NO such sensor ** (e.g. Cairo Bathroom = −1 in every row)
+  --- 2 door-contact flag columns (numeric precursor) ---
+  OutsideDoor_Open, OutsideDoor_Close
+      OPEN/CLOSE counts for homes with door contacts; −1 for Cairo
+  --- 2 aggregates ---
+  Total_Activity        sum of native room counts
+  Total_Contact_Events  door OPEN+CLOSE counts (Cairo: OutsideDoor ON/OFF
+                        count, since its door speaks ON/OFF)
+  --- 3 temporal ---
+  Time_Of_Day           Night | Morning | Afternoon | Evening
+                        (22–06 / 06–12 / 12–18 / 18–22)
+  Day_Of_Week           Weekday | Weekend
+  Is_Night              Yes | No
+NOTE: at this stage Time_Of_Day/Day_Of_Week/Is_Night are already categorical;
+      they are never numeric. The −1 sentinels exist ONLY inside this stage.
+
+--------------------------------------------------------------------------------
+STAGE 4 — DISCRETIZATION (Phases 10–11)
+--------------------------------------------------------------------------------
+Code:       get_discretization_rules(), discretize_evidence_features(df)
+In:         numeric window table from Stage 3
+Rules (documented in outputs/metrics/discretization_rules.json):
+  room activity counts   −1 → "Unavailable"; 0 → "None"; 1–2 → "Low";
+                         ≥3 → "High"
+  Total_Activity         0 → "None"; 1–2 → "Low"; 3–5 → "Medium"; ≥6 → "High"
+  door counts            −1 → "Unavailable"; 0 → "No"; >0 → "Yes"
+  (Time_Of_Day / Day_Of_Week / Is_Night pass through unchanged)
+Out:        same rows, 18 evidence columns now categorical. WHY −1 first:
+            it keeps "no sensor" and "no events" mathematically distinct until
+            the categorical stage, where they become "Unavailable" vs "None".
+
+--------------------------------------------------------------------------------
+STAGE 5 — WEAK LABELS (Phases 12–13)
+--------------------------------------------------------------------------------
+Code:       generate_behavioral_weak_labels(df)
+In:         discretized window table (18 categorical evidence + 3 temporal
+            already categorical)
+Rules (all threshold-based on the SAME row and its neighbors in time):
+  Returning_Home    "Yes" if previous window gap ≥600 s AND (door active OR
+                    any activity) — activity resuming after ≥10 min absence
+  Leaving_Home      "Yes" if door active in this window AND next gap ≥600 s —
+                    door event followed by ≥10 min silence
+  Home_Occupancy    "Empty" iff Leaving_Home == "Yes" this window, else
+                    "Occupied"
+  Resident_Activity Empty-or-Total_Activity=None → "Inactive"; Low → "Low";
+                    Medium → "Moderate"; High → "High"
+  Resident_Sleep    "Sleeping" iff Is_Night=Yes AND Occupied AND no kitchen
+                    AND no living-room activity AND Resident_Activity ∈
+                    {Inactive, Low}; else "Awake"
+  Unusual_Activity  "Unusual" iff night door activity OR night High activity
+                    outside the bedroom OR Medium/High activity while Empty;
+                    else "Normal"
+Out:        each row now has 26 categorical columns (18 evidence + 6 labels +
+            home_id + window_start).
+
+--------------------------------------------------------------------------------
+STAGE 6 — CONCATENATION & CHRONOLOGICAL SPLIT (Phases 14–15)
+--------------------------------------------------------------------------------
+Code:       build_modeling_dataset(save_intermediate=True)
+Steps:      concat the 3 per-home tables → per-home chronological sort →
+            70/15/15 split within each home by position (NO shuffle) → save
+            4 CSVs + outputs/metrics/split_metadata.json.
+FORMAT of the modeling CSVs (data/processed/*.csv), identical header for all:
+  home_id,window_start,Bedroom_Activity,Bathroom_Activity,DiningRoom_Activity,
+  GuestRoom_Activity,Kitchen_Activity,LivingRoom_Activity,
+  LoungeChair_Activity,OtherRoom_Activity,OutsideDoor_Activity,
+  WorkArea_Activity,Hall_Activity,OutsideDoor_Open,OutsideDoor_Close,
+  Time_Of_Day,Day_Of_Week,Is_Night,Total_Activity,Total_Contact_Events,
+  Home_Occupancy,Resident_Activity,Resident_Sleep,Leaving_Home,
+  Returning_Home,Unusual_Activity
+  * 26 columns, comma-separated, header row present, all feature values are
+    category strings ("Unavailable"/"None"/"Low"/"High"/"Night"/"Yes"/...).
+  * home_id ∈ {Aruba, Cairo, Milan}; window_start "YYYY-MM-DD HH:MM:SS".
+  * Rows: modeling 1,078,797 / train 755,156 / validation 161,820 /
+    test 161,821.
+  * Row order = chronological per home (train oldest → test newest).
+
+--------------------------------------------------------------------------------
+STAGE 7 — NETWORK CONSTRUCTION & VALIDATION (Phases 16–18)
+--------------------------------------------------------------------------------
+Code:       src/model.py — DAG_EDGES (39 edges), build_full_dag(),
+            validate_network_structure()
+Out:        outputs/metrics/network_structure.txt (edge list + stats) and
+            outputs/figures/network_dag.png. Checks: acyclicity (nx),
+            every node reachable design, max parent set 4, exact 26 nodes.
+FORMAT network_structure.txt: plain text; one "parent → child" edge per line
+            grouped by node, plus node-category counts.
+
+--------------------------------------------------------------------------------
+STAGE 8 — CPT LEARNING (Phase 19)
+--------------------------------------------------------------------------------
+Code:       train_bayesian_network(df_train)
+Input:      train.csv (755,156 rows), the 24 probabilistic columns
+            (18 evidence + 6 behavioral — decision/utility excluded).
+            Values cast to str; edges filtered to probabilistic nodes.
+Method:     pgmpy DiscreteBayesianNetwork + DiscreteBayesianEstimator
+            (prior_type="BDeu", equivalent_sample_size=5); model.check_model()
+            asserted valid; persisted with joblib.
+Output:     outputs/models/bayesian_network.pkl
+FORMAT:     joblib-compressed pickle of the pgmpy model object. Contains the
+            DAG + 24 CPD tables (each CPD = state_names for node & parents +
+            probability array). SECURITY NOTE: pickle files execute code on
+            load — treat this file as trusted input only, never accept one
+            from untrusted sources; the dashboard loads it read-only at
+            startup. (This is the single load site: dashboard/main.py →
+            BayesianInferenceEngine.)
+Trained-on-train-only: all CPT statistics and thresholds derive solely from
+            the 70% training partition.
+
+--------------------------------------------------------------------------------
+STAGE 9 — INFERENCE + MEU DECISION (Phases 20–23)
+--------------------------------------------------------------------------------
+Code:       BayesianInferenceEngine.query(evidence)  [src/model.py]
+            select_action_meu(posteriors)            [src/decision.py]
+Per-window flow (also the dashboard's per-update flow):
+  1. Row → evidence dict: take the 18 evidence columns; DROP any whose value
+     is "Unavailable" (an absent sensor must not be evidence).
+  2. engine.query(evidence): VariableElimination.query(variables=6 behavioral,
+     evidence=filtered, joint=False); the engine also silently filters keys
+     that are not BN nodes or whose value is not a known state of that node.
+  3. Posteriors FORMAT: dict {behavioral_var: {state: float}} —
+     e.g. {"Home_Occupancy": {"Empty": 3.4e-07, "Occupied": 0.9999996},
+           "Resident_Activity": {"Inactive":..,"Low":..,"Moderate":..,"High":..},
+           ...} — each inner dict sums to 1.0.
+  4. compute_situational_state_probabilities(): combine 3 facets
+     (Unusual?, Occupied?, Sleeping?) into 6 mutually exclusive situational
+     states; normalized to sum 1.0. Defaults (0.01/0.95/0.05) kick in if a
+     variable is missing from posteriors.
+  5. EU(action) = Σ_state P(state)·U(action,state) over the 5 actions × 6
+     states utility matrix (src/decision.py UTILITY_MATRIX; exported to
+     outputs/metrics/utility_table.csv: columns state, action, utility).
+  6. selected_action = argmax EU.
+Decision FORMAT: {"selected_action": str,
+                  "expected_utilities": {action: float},
+                  "state_probabilities": {state: float}}.
+
+--------------------------------------------------------------------------------
+STAGE 10 — EVALUATION (Phases 25–28)
+--------------------------------------------------------------------------------
+Code:       src/evaluation.py → evaluate_test_set(engine, df_test, 3000),
+            run_cross_home_experiments(df_train, df_test)
+Inputs:     engine + test.csv subset (first 3,000 windows) + train table.
+Produces (all under outputs/metrics/):
+  behavioral_metrics.csv   per variable: accuracy, weighted_f1, macro_f1
+  decision_metrics.csv     per model (BDN, rule baseline): mean_utility,
+                           median, total, std, false_alert_rate,
+                           unusual_detection_rate, action-distribution %
+  cross_home_metrics.csv   per experiment (Aruba→Aruba, Aruba→Milan,
+                           Aruba+Milan→Cairo): accuracies + mean utility;
+                           also saves model_Exp*.pkl (same pkl format; same
+                           trust caveat)
+  latency_metrics.json     3,000-query latency stats: mean/median/p95/p99/
+                           min/max/total — real hardware timing
+FORMAT notes: metrics CSVs have a header row, snake_case columns, one row per
+            variable/model/experiment. latency_metrics.json is a JSON object
+            of scalar stats. Confusion matrices are computed in-memory and
+            rendered to figures (next stage), not saved as CSV.
+
+--------------------------------------------------------------------------------
+STAGE 11 — FIGURES (Phases 29–30)
+--------------------------------------------------------------------------------
+Code:       analyze_distributions(...) + generate_evaluation_figures(...)
+Output:     10 PNGs in outputs/figures/: dataset_event_distribution,
+            activity_distributions, activity_over_time, network_dag,
+            example_posterior_output, action_distribution, utility_comparison,
+            confusion_matrices, cross_home_performance, latency_distribution.
+FORMAT:     PNG, matplotlib Agg backend, ~150 dpi default. Each figure is
+            described (with insertion points) in dcumentation.txt Part 7.
+
+--------------------------------------------------------------------------------
+STAGE 12 — REPORTS & REPRODUCIBILITY (Phases 31–33)
+--------------------------------------------------------------------------------
+Output files:
+  outputs/FINAL_RESULTS.md     Markdown: dataset summary, 26-node table,
+                               missing-sensor table, model/decision summary,
+                               behavioral + decision metric tables, latency
+                               table, cross-home table, figure index, and a
+                               Limitations section.
+  outputs/metrics/run_config.json  JSON object: python + package versions,
+                               seed 42, discretization thresholds, split
+                               ratios, BN library, estimator & ESS, inference
+                               algorithm, decision action count — everything
+                               needed to reproduce a run.
+
+--------------------------------------------------------------------------------
+STAGE 13 — DASHBOARD: LIVE REPLAY OF THE PIPELINE OUTPUT
+--------------------------------------------------------------------------------
+Code:       dashboard/main.py (FastAPI) + static/dashboard.js (D3 frontend)
+Start:      dashboard/run_dashboard.sh → http://localhost:8000
+Inputs:     outputs/models/bayesian_network.pkl + data/processed/test.csv
+            (the same artifacts Stages 8/6 produced — nothing is retrained).
+Flow:       browser GET / → index.html; GET /api/network → nodes/edges +
+            deterministic pipeline-stage layout coords (6 ordered columns:
+            evidence sources → derived evidence → behavioral → explained
+            sensor evidence → decision → utility, with per-column spacing and
+            stage caption labels); WS /ws {"type":"play","speed":1.0} → the
+            server's playback_loop pushes {"type":"update","data":...} per
+            window, where data = {index, total_windows, timestamp, home_id,
+            evidence(only available sensors), posteriors, decision,
+            true_labels, predictions}. REST: /api/window/{idx} (any integer —
+            negative/out-of-range returns {"error":"Window not found"}),
+            /api/next-window, /api/stats.
+Update FORMAT (JSON over WebSocket):
+  {"type": "update",
+   "data": {"index": 0, "total_windows": 161821,
+            "timestamp": "2011-05-08 22:18:40", "home_id": "Aruba",
+            "evidence": {evidence_node: state, ...}   (Unavailable omitted),
+            "posteriors": {behavioral: {state: prob}},
+            "decision": {"selected_action": str, "expected_utilities": {},
+                         "state_probabilities": {}},
+            "true_labels": {behavioral: weak-label state},
+            "predictions": {behavioral: MAP state}}}
+Frontend rendering: D3 DAG (zoom/pan, curved edges), evidence grid, posterior
+bars, prediction-vs-weak-label comparison cards, MEU utility bars, situational
+state probabilities, latency readout.
+
+--------------------------------------------------------------------------------
+END-TO-END FORMAT CHAIN (one artifact per arrow)
+--------------------------------------------------------------------------------
+  4-col text CSV → cleaned DataFrame → 26-col numeric window table (−1
+  sentinels) → 26-col categorical table → {train,val,test}.csv (26-col, 24
+  feature columns + home_id + window_start) → .pkl model (24 CPTs) →
+  posteriors dict → decision dict → metrics CSV/JSON + 10 PNGs +
+  FINAL_RESULTS.md → live JSON update stream over WebSocket.
+
+--------------------------------------------------------------------------------
+INVARIANTS GUARANTEED AT EVERY STAGE
+--------------------------------------------------------------------------------
+  * "Unavailable" always means the sensor does not exist in that home — never
+    zero, never fabricated (Cairo door nodes stay Unavailable).
+  * All thresholds, CPTs and rules are derived from the training partition
+    only.
+  * Row order is chronological per home; the test set is strictly the newest
+    15%.
+  * The 26-column schema is identical across modeling_dataset, train,
+    validation and test CSVs, and is the same schema the dashboard replays.
+  * Every probability reported (posteriors, situational states) sums to 1.0
+    by construction (BDeu-normalized CPTs; explicit renormalization).
+================================================================================
+END OF PIPELINE DOCUMENT
+================================================================================

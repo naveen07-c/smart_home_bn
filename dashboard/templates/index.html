@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Home Decision Network — Live Dashboard</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="app-container">
+
+        <!-- ============================================================ -->
+        <!-- Header                                                        -->
+        <!-- ============================================================ -->
+        <header class="header">
+            <div class="header-left">
+                <h1>Probabilistic Smart Home Decision Network</h1>
+                <span class="badge">26-Node Bayesian Decision Network</span>
+            </div>
+            <div class="header-right">
+                <div class="live-clock" id="liveClock" title="Replayed sensor time (5 s per window)">
+                    <span class="clock-label">SENSORS</span>
+                    <span class="clock-value" id="clockValue">—</span>
+                </div>
+                <div class="status-indicator" id="connectionStatus">
+                    <span class="dot"></span>
+                    <span>Connecting...</span>
+                </div>
+                <div class="window-counter">
+                    W <span id="currentWindow">0</span> / <span id="totalWindows">0</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- ============================================================ -->
+        <!-- Main 3-zone grid: left info · CENTER NETWORK · right info     -->
+        <!-- ============================================================ -->
+        <main class="main-grid">
+
+            <!-- LEFT: streaming inference (evidence + posteriors) -->
+            <section class="panel side-panel left-panel">
+                <div class="panel-header">
+                    <h2>Live Inference</h2>
+                    <span class="stream-chip" id="streamChip">idle</span>
+                </div>
+                <div class="panel-scroll">
+                    <div class="side-section">
+                        <h3>Observed Evidence <span class="h3-note">5-second window</span></h3>
+                        <div class="evidence-grid" id="evidenceGrid"></div>
+                    </div>
+                    <div class="side-section">
+                        <h3>Behavioral Posteriors</h3>
+                        <div class="posteriors-grid" id="posteriorsGrid"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- CENTER: the network, center stage -->
+            <section class="panel center-panel">
+                <div class="panel-header center-header">
+                    <h2>26-Node Network</h2>
+                    <div class="legend" id="networkLegend"></div>
+                </div>
+
+                <div class="network-canvas" id="networkCanvas">
+                    <svg id="networkSvg"></svg>
+                    <div class="pulse-status" id="pulseStatus">Press play to start the live replay</div>
+                    <div class="node-info floating" id="nodeInfo">
+                        <p class="placeholder">Click a node for details</p>
+                    </div>
+                </div>
+
+                <!-- Live replay dock -->
+                <div class="live-dock">
+                    <div class="transport">
+                        <button class="btn btn-icon" id="btnPrev" title="Previous window">⏮</button>
+                        <button class="btn btn-primary btn-icon" id="btnPlay" title="Play live replay">▶</button>
+                        <button class="btn btn-icon" id="btnPause" title="Pause" disabled>⏸</button>
+                        <button class="btn btn-icon" id="btnNext" title="Next window">⏭</button>
+                        <select id="speedSelect" class="speed-select" title="Replay speed (seconds per 5-second window)">
+                            <option value="0.5">0.5s</option>
+                            <option value="1.0" selected>1s</option>
+                            <option value="2.0">2s</option>
+                            <option value="5.0">5s</option>
+                        </select>
+                    </div>
+
+                    <div class="timeline-wrap">
+                        <div class="timeline" id="timeline">
+                            <div class="timeline-buffer" id="timelineBuffer"></div>
+                            <div class="timeline-progress" id="timelineProgress"></div>
+                            <div class="timeline-knob" id="timelineKnob"></div>
+                        </div>
+                        <div class="timeline-meta">
+                            <span id="timelineLabel">window 0 / 0</span>
+                            <span id="timelineHome">—</span>
+                            <span id="timelineTimestamp">—</span>
+                        </div>
+                    </div>
+
+                    <div class="window-pulse" id="windowPulse" title="Each pulse = one 5-second sensor window">
+                        <span class="pulse-ring"></span>
+                        <span class="pulse-text">5s</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- RIGHT: decision engine + prediction check -->
+            <section class="panel side-panel right-panel">
+                <div class="panel-header">
+                    <h2>Decision Engine (MEU)</h2>
+                </div>
+                <div class="panel-scroll">
+                    <div class="selected-action" id="selectedAction">
+                        <div class="action-label">Selected Action</div>
+                        <div class="action-name" id="actionName">—</div>
+                        <div class="action-confidence" id="actionConfidence">Expected Utility: —</div>
+                    </div>
+
+                    <div class="side-section">
+                        <h3>Expected Utilities</h3>
+                        <div class="utilities-rows" id="utilitiesRows"></div>
+                    </div>
+
+                    <div class="side-section">
+                        <h3>Situational States</h3>
+                        <div class="states-grid" id="statesGrid"></div>
+                    </div>
+
+                    <div class="side-section">
+                        <h3>Prediction vs Weak Label</h3>
+                        <div class="comparison-grid" id="comparisonGrid"></div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <div class="footer-left">
+                <span>CASAS · Aruba / Cairo / Milan</span>
+                <span class="divider">|</span>
+                <span>pgmpy DiscreteBayesianNetwork + BDeu</span>
+                <span class="divider">|</span>
+                <span>Variable Elimination (exact)</span>
+            </div>
+            <div class="footer-right">
+                <span id="latencyDisplay">Latency: — ms</span>
+            </div>
+        </footer>
+    </div>
+
+    <script src="/static/dashboard.js"></script>
+</body>
+</html>
