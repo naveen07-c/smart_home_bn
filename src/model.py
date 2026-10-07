@@ -270,11 +270,14 @@ class BayesianInferenceEngine:
         """
         Executes inference for specified variables given observed evidence.
         Filters evidence to only include valid variables and recognized states.
+        Warns when evidence is dropped due to invalid variables or states.
         """
+        import warnings
         if variables is None:
             variables = self.target_vars
             
         clean_evidence = {}
+        dropped_evidence = []
         for k, v in evidence.items():
             if k in self.model.nodes and k not in variables:
                 val_str = str(v)
@@ -283,8 +286,17 @@ class BayesianInferenceEngine:
                     cpd = self.model.get_cpds(k)
                     if val_str in cpd.state_names[k]:
                         clean_evidence[k] = val_str
-                except Exception:
-                    pass
+                    else:
+                        dropped_evidence.append(f"{k}={val_str} (valid: {list(cpd.state_names[k])})")
+                except Exception as e:
+                    dropped_evidence.append(f"{k}={val_str} (error: {e})")
+            elif k not in self.model.nodes:
+                dropped_evidence.append(f"{k}={v} (unknown variable)")
+            elif k in variables:
+                dropped_evidence.append(f"{k}={v} (target variable)")
+                
+        if dropped_evidence:
+            warnings.warn(f"Dropped evidence: {', '.join(dropped_evidence)}", UserWarning)
                     
         # Variable elimination query
         res = self.infer.query(variables=variables, evidence=clean_evidence, joint=False)

@@ -86,7 +86,7 @@ def evaluate_test_set(engine: BayesianInferenceEngine, df_test: pd.DataFrame, ma
             y_true[var].append(str(row[var]))
             
         # Decision Layer
-        decision_bn = select_action_meu(posteriors)
+        decision_bn = select_action_meu(posteriors, engine=engine, evidence=evidence)
         bn_action = decision_bn["selected_action"]
         bn_actions.append(bn_action)
         
@@ -145,8 +145,9 @@ def evaluate_test_set(engine: BayesianInferenceEngine, df_test: pd.DataFrame, ma
     n_samples = len(test_sub)
     true_states = [test_sub.iloc[i].to_dict() for i in range(n_samples)]
     
-    false_alert_bn = sum(1 for a, s in zip(bn_actions, true_states) if a in ["Silent_Alert", "Local_Alert"] and s["Unusual_Activity"] == "Normal")
-    false_alert_rule = sum(1 for a, s in zip(rule_actions, true_states) if a in ["Silent_Alert", "Local_Alert"] and s["Unusual_Activity"] == "Normal")
+    ALERT_ACTIONS = ["Notify_Resident", "Silent_Alert", "Local_Alert"]
+    false_alert_bn = sum(1 for a, s in zip(bn_actions, true_states) if a in ALERT_ACTIONS and s["Unusual_Activity"] == "Normal")
+    false_alert_rule = sum(1 for a, s in zip(rule_actions, true_states) if a in ALERT_ACTIONS and s["Unusual_Activity"] == "Normal")
     
     unusual_total = sum(1 for s in true_states if s["Unusual_Activity"] == "Unusual")
     unusual_detected_bn = sum(1 for a, s in zip(bn_actions, true_states) if a in ["Notify_Resident", "Silent_Alert", "Local_Alert"] and s["Unusual_Activity"] == "Unusual")
@@ -252,13 +253,21 @@ def run_cross_home_experiments(df_train: pd.DataFrame, df_test: pd.DataFrame):
         # Subsample test if needed
         sub_test = test_h.sample(n=min(1500, len(test_h)), random_state=42).reset_index(drop=True)
         
+        # Get valid states for the model
+        model_cpds = {node: model_exp.get_cpds(node) for node in model_exp.nodes}
+        valid_states = {node: set(cpd.state_names[node]) for node, cpd in model_cpds.items()}
+        
         y_true_occ, y_pred_occ = [], []
         y_true_act, y_pred_act = [], []
         y_true_sleep, y_pred_sleep = [], []
         utilities = []
         
         for _, row in sub_test.iterrows():
-            ev = {k: str(row[k]) for k in target_evidence if str(row[k]) != "Unavailable"}
+            ev = {}
+            for k in target_evidence:
+                val = str(row[k])
+                if val != "Unavailable" and k in valid_states and val in valid_states[k]:
+                    ev[k] = val
             posteriors = engine_exp.query(ev)
             
             p_occ = max(posteriors["Home_Occupancy"], key=posteriors["Home_Occupancy"].get)
@@ -272,7 +281,7 @@ def run_cross_home_experiments(df_train: pd.DataFrame, df_test: pd.DataFrame):
             y_true_sleep.append(str(row["Resident_Sleep"]))
             y_pred_sleep.append(p_slp)
             
-            dec = select_action_meu(posteriors)
+            dec = select_action_meu(posteriors, engine=engine_exp, evidence=ev)
             act = dec["selected_action"]
             u = evaluate_action_realized_utility(act, {var: str(row[var]) for var in BEHAVIORAL_NODES})
             utilities.append(u)

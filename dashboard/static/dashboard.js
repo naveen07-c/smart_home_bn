@@ -162,9 +162,9 @@ function renderNetwork() {
             const tx = xScale(t.x), ty = yScale(t.y);
             const dx = tx - sx, dy = ty - sy;
             if (Math.abs(dx) < 1) {
-                // Same stage column: arc gently to the right so intra-column
-                // dependencies stay readable instead of overlapping the nodes.
-                const bulge = 42;
+                // Same stage column: arc gently to the right using relative bulge
+                // Scale bulge based on container width for responsiveness
+                const bulge = Math.max(30, width * 0.06);
                 return `M${sx},${sy} C${sx + bulge},${sy + dy * 0.25} ${sx + bulge},${sy + dy * 0.75} ${tx},${ty}`;
             }
             const dr = Math.hypot(dx, dy) * 1.4;
@@ -179,9 +179,18 @@ function renderNetwork() {
         .attr('class', 'network-node')
         .attr('id', d => `node-${d.id}`)
         .attr('transform', d => `translate(${xScale(d.x)},${yScale(d.y)})`)
+        .attr('role', 'button')
+        .attr('tabindex', 0)
+        .attr('aria-label', d => `${d.label}, ${d.category}`)
         .on('click', (event, d) => selectNode(d))
         .on('mouseover', showNodeTooltip)
-        .on('mouseout', hideNodeTooltip);
+        .on('mouseout', hideNodeTooltip)
+        .on('keydown', (event, d) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                selectNode(d);
+            }
+        });
 
     node.append('circle')
         .attr('class', 'node-circle')
@@ -203,7 +212,21 @@ function renderNetwork() {
     node.append('text')
         .attr('class', 'node-label')
         .attr('y', d => d.category === 'behavioral' ? 39 : 31)
-        .text(d => d.label);
+        .attr('text-anchor', 'middle')
+        .each(function(d) {
+            const self = d3.select(this);
+            const maxWidth = d.category === 'behavioral' ? 140 : 110;
+            const text = d.label;
+            self.text(text);
+            // Truncate with ellipsis if too wide
+            if (this.getComputedTextLength() > maxWidth) {
+                let truncated = text;
+                while (truncated.length > 3 && this.getComputedTextLength() > maxWidth) {
+                    truncated = truncated.slice(0, -1);
+                    self.text(truncated + '…');
+                }
+            }
+        });
 
     fitToView(g, svg, zoom, width, height);
 }
@@ -329,13 +352,14 @@ function animateNodesForWindow(data) {
 // ============================================================================
 function connectWebSocket() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    state.ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    // Support reverse proxies: use explicit backend host if configured, else fall back to window.location.host
+    const wsHost = window.__SMART_HOME_WS_HOST || window.location.host;
+    state.ws = new WebSocket(`${protocol}//${wsHost}/ws`);
 
     state.ws.onopen = () => {
         updateConnectionStatus(true);
         if (!state.wsEverConnected) {
             state.wsEverConnected = true;
-            startLive();                    // auto-start the live replay once
         }
     };
     state.ws.onmessage = (event) => {

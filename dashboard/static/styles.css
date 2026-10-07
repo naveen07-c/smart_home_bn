@@ -264,6 +264,16 @@ body {
 
 .network-node:hover .node-circle { filter: brightness(1.25); }
 
+.network-node:focus {
+    outline: none;
+}
+
+.network-node:focus .node-ring {
+    stroke: var(--accent-blue);
+    opacity: 1;
+    stroke-width: 2;
+}
+
 .network-node.selected .node-ring {
     stroke: var(--text-primary);
     opacity: 1;

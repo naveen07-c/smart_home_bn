@@ -68,30 +68,24 @@ def load_model_and_data():
 # Deterministic pipeline-flow layout: stage columns ordered left -> right to
 # mirror the project's inference pipeline. Column membership follows the DAG
 # in src/model.py so every arrow either moves forward across columns or arcs
-# within one:
-#   col 0  evidence sources (independent sensor/temporal inputs)
-#   col 1  derived evidence (temporal + aggregates computed from col 0)
-#   col 2  behavioral states inferred from evidence
-#   col 3  sensor evidence explained by the behavioral layer
-#   col 4  decision, col 5 utility
+# within one. Distributed across 8 columns to prevent overlap.
+#   col 0  Temporal inputs
+#   col 1  Door sensors
+#   col 2  Primary rooms
+#   col 3  Secondary rooms
+#   col 4  Aggregates
+#   col 5  Behavioral (inferred)
+#   col 6  Decision
+#   col 7  Utility
 STAGE_COLUMNS = [
-    ("Evidence sources", [
-        "Day_Of_Week", "OutsideDoor_Open", "OutsideDoor_Close",
-        "LivingRoom_Activity", "Kitchen_Activity", "Bedroom_Activity",
-    ]),
-    ("Derived evidence", [
-        "Time_Of_Day", "Is_Night", "Total_Contact_Events",
-        "OutsideDoor_Activity", "Total_Activity",
-    ]),
-    ("Behavioral (inferred)", [
-        "Home_Occupancy", "Resident_Activity", "Resident_Sleep",
-        "Leaving_Home", "Returning_Home", "Unusual_Activity",
-    ]),
-    ("Explained sensor evidence", [
-        "Bathroom_Activity", "DiningRoom_Activity", "GuestRoom_Activity",
-        "LoungeChair_Activity", "OtherRoom_Activity", "WorkArea_Activity",
-        "Hall_Activity",
-    ]),
+    ("Temporal Inputs", ["Day_Of_Week", "Time_Of_Day", "Is_Night"]),
+    ("Door Sensors", ["OutsideDoor_Open", "OutsideDoor_Close", "Total_Contact_Events", "OutsideDoor_Activity"]),
+    ("Primary Rooms", ["Bedroom_Activity", "Kitchen_Activity", "LivingRoom_Activity"]),
+    ("Secondary Rooms", ["Bathroom_Activity", "DiningRoom_Activity", "GuestRoom_Activity",
+                           "LoungeChair_Activity", "OtherRoom_Activity", "WorkArea_Activity", "Hall_Activity"]),
+    ("Aggregates", ["Total_Activity"]),
+    ("Behavioral (Inferred)", ["Home_Occupancy", "Resident_Activity", "Resident_Sleep",
+                                 "Leaving_Home", "Returning_Home", "Unusual_Activity"]),
     ("Decision", ["Smart_Home_Action"]),
     ("Utility", ["Homeowner_Utility"]),
 ]
@@ -178,7 +172,7 @@ def run_inference_on_window(window_data: pd.Series) -> Dict[str, Any]:
     posteriors = engine.query(evidence)
     
     # Run MEU decision
-    decision = select_action_meu(posteriors)
+    decision = select_action_meu(posteriors, engine=engine, evidence=evidence)
     
     # Get true weak labels for comparison
     true_labels = {var: str(window_data[var]) for var in BEHAVIORAL_NODES}
@@ -288,11 +282,6 @@ async def websocket_endpoint(websocket: WebSocket):
     global is_playing, playback_task, playback_speed, current_index
     await websocket.accept()
     connected_clients.append(websocket)
-    # Make the site live on arrival: any new client (or refresh) resumes playback.
-    if not is_playing:
-        is_playing = True
-        if playback_task is None or playback_task.done():
-            playback_task = asyncio.create_task(playback_loop())
     try:
         while True:
             # Keep connection alive, handle client messages

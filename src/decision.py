@@ -99,11 +99,39 @@ def export_utility_table(output_dir: str = METRICS_DIR) -> str:
     return csv_path
 
 
-def compute_situational_state_probabilities(posteriors: dict) -> dict:
+def compute_situational_state_probabilities(posteriors: dict, engine=None, evidence: dict = None) -> dict:
     """
     Computes probability distribution over the 6 mutually exclusive situational states
-    from the marginal posteriors of Home_Occupancy, Resident_Sleep, and Unusual_Activity.
+    from the joint posterior of Home_Occupancy, Resident_Sleep, and Unusual_Activity.
+    
+    If engine and evidence are provided, queries the exact joint distribution from the BN.
+    The engine can be either a BayesianInferenceEngine or a DiscreteBayesianNetwork model.
+    Otherwise falls back to independence assumption (approximate) from marginal posteriors.
     """
+    if engine is not None and evidence is not None:
+        from pgmpy.inference import VariableElimination
+        # Handle both BayesianInferenceEngine and DiscreteBayesianNetwork
+        if hasattr(engine, 'model'):
+            model = engine.model
+        else:
+            model = engine
+        infer = VariableElimination(model)
+        joint = infer.query(
+            variables=["Home_Occupancy", "Resident_Sleep", "Unusual_Activity"],
+            evidence=evidence,
+            joint=True
+        )
+        vals = joint.values
+        state_probs = {
+            "Normal_Awake": float(vals[1, 0, 0]),
+            "Normal_Sleeping": float(vals[1, 1, 0]),
+            "Normal_Empty": float(vals[0, 0, 0] + vals[0, 1, 0]),
+            "Unusual_Occupied_Awake": float(vals[1, 0, 1]),
+            "Unusual_Occupied_Sleeping": float(vals[1, 1, 1]),
+            "Unusual_Empty": float(vals[0, 0, 1] + vals[0, 1, 1])
+        }
+        return state_probs
+    
     p_unusual = posteriors.get("Unusual_Activity", {}).get("Unusual", 0.01)
     p_normal = 1.0 - p_unusual
     
@@ -122,7 +150,6 @@ def compute_situational_state_probabilities(posteriors: dict) -> dict:
         "Unusual_Empty": p_unusual * p_empty
     }
     
-    # Normalize probabilities to sum to 1.0
     total_prob = sum(state_probs.values())
     if total_prob > 0:
         state_probs = {k: v / total_prob for k, v in state_probs.items()}
@@ -130,13 +157,13 @@ def compute_situational_state_probabilities(posteriors: dict) -> dict:
     return state_probs
 
 
-def select_action_meu(posteriors: dict) -> dict:
+def select_action_meu(posteriors: dict, engine=None, evidence: dict = None) -> dict:
     """
     Phase 23: Maximum Expected Utility (MEU) Action Selection.
     EU(action) = sum_state P(state | evidence) * U(action, state)
     best_action = argmax EU(action)
     """
-    state_probs = compute_situational_state_probabilities(posteriors)
+    state_probs = compute_situational_state_probabilities(posteriors, engine, evidence)
     
     expected_utilities = {}
     for action in ACTIONS:
