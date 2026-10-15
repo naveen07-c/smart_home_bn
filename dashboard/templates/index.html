@@ -16,20 +16,29 @@
         <!-- ============================================================ -->
         <header class="header">
             <div class="header-left">
-                <h1>Probabilistic Smart Home Decision Network</h1>
-                <span class="badge">26-Node Bayesian Decision Network</span>
+                <h1>Smart Home Decision Network</h1>
+                <span class="badge">26-Node Bayesian</span>
+            </div>
+            <div class="header-center">
+
+                <!-- 100 Events Text Window Toggle Button -->
+                <button class="btn-text-window" id="btnToggleTextWindow" title="Open 100 Events Text Window (or press 'T')">
+                    <span class="btn-tw-icon">📋</span>
+                    <span class="btn-tw-label">100 Events Text Window</span>
+                    <span class="btn-tw-badge">5 Actions × 20</span>
+                </button>
             </div>
             <div class="header-right">
-                <div class="live-clock" id="liveClock" title="Replayed sensor time (5 s per window)">
-                    <span class="clock-label">SENSORS</span>
+                <div class="live-clock" id="liveClock" title="Sensor window time">
+                    <span class="clock-label">WINDOW</span>
                     <span class="clock-value" id="clockValue">—</span>
                 </div>
                 <div class="status-indicator" id="connectionStatus">
                     <span class="dot"></span>
-                    <span>Connecting...</span>
+                    <span>Connecting…</span>
                 </div>
                 <div class="window-counter">
-                    W <span id="currentWindow">0</span> / <span id="totalWindows">0</span>
+                    <span id="currentWindow">0</span> / <span id="totalWindows">0</span>
                 </div>
             </div>
         </header>
@@ -47,7 +56,7 @@
                 </div>
                 <div class="panel-scroll">
                     <div class="side-section">
-                        <h3>Observed Evidence <span class="h3-note">5-second window</span></h3>
+                        <h3>Observed Evidence <span class="h3-note">5-s window</span></h3>
                         <div class="evidence-grid" id="evidenceGrid"></div>
                     </div>
                     <div class="side-section">
@@ -66,24 +75,35 @@
 
                 <div class="network-canvas" id="networkCanvas">
                     <svg id="networkSvg"></svg>
-                    <div class="pulse-status" id="pulseStatus">Press play to start the live replay</div>
+                    <div class="pulse-status" id="pulseStatus">Press play to start</div>
                     <div class="node-info floating" id="nodeInfo">
                         <p class="placeholder">Click a node for details</p>
                     </div>
                 </div>
 
+
+
                 <!-- Live replay dock -->
                 <div class="live-dock">
                     <div class="transport">
                         <button class="btn btn-icon" id="btnPrev" title="Previous window">⏮</button>
-                        <button class="btn btn-primary btn-icon" id="btnPlay" title="Play live replay">▶</button>
+                        <button class="btn btn-primary btn-icon" id="btnPlay" title="Play">▶</button>
                         <button class="btn btn-icon" id="btnPause" title="Pause" disabled>⏸</button>
                         <button class="btn btn-icon" id="btnNext" title="Next window">⏭</button>
-                        <select id="speedSelect" class="speed-select" title="Replay speed (seconds per 5-second window)">
-                            <option value="0.5">0.5s</option>
-                            <option value="1.0" selected>1s</option>
-                            <option value="2.0">2s</option>
-                            <option value="5.0">5s</option>
+                        <select id="speedSelect" class="speed-select" title="Replay speed">
+                            <option value="0.5">0.5 s</option>
+                            <option value="1.0" selected>1 s</option>
+                            <option value="2.0">2 s</option>
+                            <option value="5.0">5 s</option>
+                        </select>
+                        <!-- Action Category Filter for quick jumping during demo -->
+                        <select id="actionFilterSelect" class="action-filter-select" title="Jump to action category">
+                            <option value="all">⚡ All Events (100)</option>
+                            <option value="No_Action">⚪ No Action (20)</option>
+                            <option value="Monitor">🔵 Monitor (20)</option>
+                            <option value="Notify_Resident">🟣 Notify Resident (20)</option>
+                            <option value="Silent_Alert">🟠 Silent Alert (20)</option>
+                            <option value="Local_Alert">🔴 Local Alert (20)</option>
                         </select>
                     </div>
 
@@ -100,9 +120,9 @@
                         </div>
                     </div>
 
-                    <div class="window-pulse" id="windowPulse" title="Each pulse = one 5-second sensor window">
+                    <div class="window-pulse" id="windowPulse" title="One 5-second sensor window">
                         <span class="pulse-ring"></span>
-                        <span class="pulse-text">5s</span>
+                        <span class="pulse-text">5 s</span>
                     </div>
                 </div>
             </section>
@@ -137,19 +157,100 @@
             </section>
         </main>
 
-        <!-- Footer -->
+        <!-- Footer — minimal: latency only -->
         <footer class="footer">
-            <div class="footer-left">
-                <span>CASAS · Aruba / Cairo / Milan</span>
-                <span class="divider">|</span>
-                <span>pgmpy DiscreteBayesianNetwork + BDeu</span>
-                <span class="divider">|</span>
-                <span>Variable Elimination (exact)</span>
-            </div>
-            <div class="footer-right">
-                <span id="latencyDisplay">Latency: — ms</span>
-            </div>
+            <span id="latencyDisplay" class="footer-latency">— ms</span>
         </footer>
+
+        <!-- ============================================================ -->
+        <!-- 100 Events Text Window Modal / Drawer                        -->
+        <!-- ============================================================ -->
+        <div class="text-window-overlay" id="textWindowOverlay" aria-hidden="true">
+            <div class="text-window-modal" role="dialog" aria-labelledby="twmTitle">
+                <div class="twm-header">
+                    <div class="twm-title-area">
+                        <div class="twm-header-top">
+                            <span class="twm-pill">DEMONSTRATION TEST WINDOW</span>
+                            <span class="twm-badge">100 Events · 5 Distinct Outputs × 20</span>
+                        </div>
+                        <h2 class="twm-title" id="twmTitle">100 Events Text Window — Decision Engine Outputs</h2>
+                        <p class="twm-subtitle">Curated test dataset containing distinct outputs of the Bayesian Network + Maximum Expected Utility (MEU) Decision Engine across Aruba, Cairo, & Milan</p>
+                    </div>
+                    <div class="twm-actions">
+                        <a href="/api/demo/export/csv" class="btn btn-sm btn-outline" download="test_100_events.csv" title="Download 100 events as CSV">⬇ Export CSV</a>
+                        <a href="/api/demo/export/json" class="btn btn-sm btn-outline" download="test_100_events.json" title="Download 100 events as JSON">⬇ Export JSON</a>
+                        <button class="btn btn-icon twm-close-btn" id="btnCloseTextWindow" title="Close Text Window (Esc)">✕</button>
+                    </div>
+                </div>
+
+                <!-- Filter Toolbar -->
+                <div class="twm-toolbar">
+                    <div class="twm-search-wrap">
+                        <input type="text" id="twmSearchInput" class="twm-search-input" placeholder="🔍 Search by scenario title, description, home, time, or sensor...">
+                        <button class="twm-search-clear" id="twmSearchClear" title="Clear search">✕</button>
+                    </div>
+                    <div class="twm-chips" id="twmActionChips">
+                        <button class="twm-chip active" data-action="all">All (100)</button>
+                        <button class="twm-chip chip-no-action" data-action="No_Action">No Action (20)</button>
+                        <button class="twm-chip chip-monitor" data-action="Monitor">Monitor (20)</button>
+                        <button class="twm-chip chip-notify" data-action="Notify_Resident">Notify Resident (20)</button>
+                        <button class="twm-chip chip-silent" data-action="Silent_Alert">Silent Alert (20)</button>
+                        <button class="twm-chip chip-local" data-action="Local_Alert">Local Alert (20)</button>
+                    </div>
+                </div>
+
+                <!-- Two-Column Content Area -->
+                <div class="twm-body">
+                    <!-- Left: Scrollable List of 100 Events -->
+                    <div class="twm-list-pane">
+                        <div class="twm-list-meta">
+                            <span id="twmVisibleCount">Showing 100 of 100 events</span>
+                            <span class="twm-hint">Click any event to load it onto the live 26-node network</span>
+                        </div>
+                        <div class="twm-list" id="twmEventList">
+                            <!-- Injected by JS -->
+                        </div>
+                    </div>
+
+                    <!-- Right: Text & Decision Output Inspector -->
+                    <div class="twm-detail-pane">
+                        <div class="twm-detail-header">
+                            <div class="twm-detail-header-left">
+                                <span class="twm-detail-title">Text Event & Decision Summary</span>
+                                <span class="twm-detail-selected-badge" id="twmSelectedBadge">Event #1 · No Action</span>
+                            </div>
+                            <div class="twm-detail-header-right">
+                                <button class="btn btn-sm btn-primary" id="btnLoadSelectedToDash" title="View in live dashboard">Load in Dashboard ↗</button>
+                                <button class="btn btn-sm btn-outline" id="btnCopyEventText" title="Copy text to clipboard">📋 Copy Text</button>
+                            </div>
+                        </div>
+                        <div class="twm-detail-content">
+                            <div class="twm-text-section">
+                                <h4>Scenario & Situation</h4>
+                                <div class="twm-text-box" id="twmDetailScenario">—</div>
+                            </div>
+                            <div class="twm-text-section">
+                                <h4>Decision Engine Reasoning (MEU)</h4>
+                                <div class="twm-text-box twm-text-expl" id="twmDetailExpl">—</div>
+                            </div>
+                            <div class="twm-text-section">
+                                <h4>Expected Utilities (All 5 Actions)</h4>
+                                <div class="twm-eu-table-wrap" id="twmDetailEUs">—</div>
+                            </div>
+                            <div class="twm-text-section">
+                                <h4>Observed Evidence & Sensor State</h4>
+                                <div class="twm-text-box" id="twmDetailEvidence">—</div>
+                            </div>
+                            <div class="twm-text-section">
+                                <h4>Raw Text / JSON Output</h4>
+                                <pre class="twm-detail-pre" id="twmDetailPre">—</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
     </div>
 
     <script src="/static/dashboard.js"></script>

@@ -49,6 +49,10 @@ python main.py
 
 # Run unit tests
 pytest tests/test_pipeline.py -v
+
+# Launch the interactive live dashboard & demo
+uvicorn dashboard.main:app --host 0.0.0.0 --port 8000
+# Then open http://localhost:8000 in your browser
 ```
 
 ---

@@ -395,13 +395,27 @@ STATUS KEY:  [DONE]  [RUNNING]  [PENDING]  [FLAGGED]
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- REMAINING WORK
+ PHASE 37 — INTERACTIVE DASHBOARD & DEMO SUITE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ [DONE] FastAPI + D3.js 26-node interactive network live dashboard
+ [DONE] Minimalist UI: removed redundant technical footer text
+ [DONE] Enhanced spacing, responsive typography, and action-colored cards
+ [DONE] Created 100-window diverse demonstration dataset in data/demo/demo_windows.json
+        Covering all 5 MEU decision actions:
+        - No_Action: 50 windows (routine multi-home activity)
+        - Monitor: 10 windows (arrival/departure monitoring)
+        - Notify_Resident: 15 windows (unusual activity while resident awake)
+        - Silent_Alert: 15 windows (unusual activity while home is empty)
+        - Local_Alert: 10 windows (high unusual activity while resident asleep)
+ [DONE] Interactive mode switcher in header (Test Set ↔ Demo 100)
+ [DONE] REST & WebSocket endpoints verified (/api/demo/stats, /api/demo/all)
 
  ✓ ALL PHASES COMPLETE — python main.py runs end-to-end (52.1 seconds)
  ✓ All 40 acceptance criteria satisfied
  ✓ 10/10 unit tests pass
  ✓ outputs/FINAL_RESULTS.md generated
+ ✓ Interactive web demonstration ready (uvicorn dashboard.main:app)
 
 =======================================================================
  END OF TRACKER
